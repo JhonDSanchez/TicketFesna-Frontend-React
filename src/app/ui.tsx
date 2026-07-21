@@ -3,7 +3,7 @@ import type { TicketItem } from "./types";
 
 export function StatusBadge({ status }: { status: TicketItem["status"] }) {
   const cfg = {
-    open: { label: "Abierto", bg: "bg-blue-50", text: "text-blue-700", dot: "bg-blue-500" },
+    open: { label: "Nuevo", bg: "bg-blue-50", text: "text-blue-700", dot: "bg-blue-500" },
     "in-progress": { label: "En Progreso", bg: "bg-amber-50", text: "text-amber-700", dot: "bg-amber-500" },
     resolved: { label: "Resuelto", bg: "bg-emerald-50", text: "text-emerald-700", dot: "bg-emerald-500" },
     closed: { label: "Cerrado", bg: "bg-gray-100", text: "text-gray-600", dot: "bg-gray-400" },
