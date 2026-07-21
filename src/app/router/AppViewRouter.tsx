@@ -187,7 +187,7 @@ export function AppViewRouter({
           {isAdmin && (
             <>
               <div className="pt-3 pb-1"><p className="text-white/30 text-[10px] uppercase tracking-widest px-3.5">Administración</p></div>
-              <NavItem icon={Inbox} label="Bandeja de Administrador" active={currentPath === "/inbox-admin"} onClick={() => goTo("/inbox-admin")} badge={allTickets.length} />
+              <NavItem icon={Inbox} label="Bandeja de Administrador" active={currentPath === "/inbox-admin"} onClick={() => goTo("/inbox-admin")} badge={allTickets.filter(t => t.status === "open").length} />
               <NavItem icon={Users} label="Gestión de Usuarios" active={currentPath === "/users"} onClick={() => goTo("/users")} />
               <NavItem icon={Building2} label="Gestión de Áreas" active={currentPath === "/areas"} onClick={() => goTo("/areas")} />
               <NavItem icon={BarChart3} label="Reportes con IA" active={currentPath === "/reports"} onClick={() => goTo("/reports")} />
@@ -236,7 +236,7 @@ export function AppViewRouter({
             <Route
               path="/inbox-admin"
               element={isAdmin ? (
-                <InboxView title="Bandeja de Administrador" subtitle="Todos los tickets del sistema" tickets={allTickets} enableAdminFilters onTicketClick={handleTicketClick} />
+                <InboxView title="Bandeja de Administrador" subtitle="Tickets abiertos del sistema" tickets={allTickets} enableAdminFilters onTicketClick={handleTicketClick} />
               ) : (
                 <div className="p-8">
                   <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
