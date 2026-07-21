@@ -19,6 +19,40 @@ import type { AreaAgent, SupportMessage, TicketItem } from "../types";
 import { getSeedMessages, initials, replaceTicketInCollections } from "../utils";
 import { PriorityBadge, StatusBadge } from "../ui";
 
+type MessageAttachment = {
+  name: string;
+  url: string;
+};
+
+type SupportMessageWithAttachments = SupportMessage & {
+  attachments?: MessageAttachment[];
+};
+
+function normalizeAttachments(raw: any): MessageAttachment[] | undefined {
+  const source = raw?.attachments ?? raw?.archivos ?? raw?.files ?? null;
+  if (!Array.isArray(source) || source.length === 0) return undefined;
+
+  const list = source
+    .map((item: any): MessageAttachment | null => {
+      if (typeof item === "string") {
+        return { name: item.split("/").pop() ?? item, url: item };
+      }
+      const url = item?.url ?? item?.path ?? item?.file_path ?? null;
+      if (!url) return null;
+      return {
+        name: item?.name ?? item?.original_name ?? String(url).split("/").pop() ?? "archivo",
+        url: String(url),
+      };
+    })
+    .filter((item: MessageAttachment | null): item is MessageAttachment => item !== null);
+
+  return list.length > 0 ? list : undefined;
+}
+
+function isImageAttachment(name: string): boolean {
+  return /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(name);
+}
+
 export function TicketSupportChatView({
   ticket,
   onBack,
@@ -34,8 +68,9 @@ export function TicketSupportChatView({
 }) {
   const navigate = useNavigate();
   const [ticketState, setTicketState] = useState<TicketItem>(ticket);
-  const [messages, setMessages] = useState<SupportMessage[]>(() => getSeedMessages(ticket));
+  const [messages, setMessages] = useState<SupportMessageWithAttachments[]>(() => getSeedMessages(ticket));
   const [input, setInput] = useState("");
+  const [archivo, setArchivo] = useState<File | null>(null);
   const [isTyping, setIsTyping] = useState(false);
   const [decisionLoading, setDecisionLoading] = useState<"yes" | "no" | null>(null);
   const [isReportOpen, setIsReportOpen] = useState(false);
@@ -79,7 +114,7 @@ export function TicketSupportChatView({
       }
 
       const payload = await response.json();
-      const mapped: SupportMessage[] = Array.isArray(payload)
+      const mapped: SupportMessageWithAttachments[] = Array.isArray(payload)
         ? payload.map((msg: any) => ({
             id: String(msg.id),
             type: msg.type === "system" ? "system" : "message",
@@ -90,6 +125,7 @@ export function TicketSupportChatView({
             content: String(msg.content ?? ""),
             timestamp: msg.timestamp ? new Date(msg.timestamp) : new Date(),
             agentName: msg.agentName ?? undefined,
+            attachments: normalizeAttachments(msg),
           }))
         : [];
 
@@ -104,13 +140,55 @@ export function TicketSupportChatView({
     loadMessages();
   }, [loadMessages]);
 
+  // 🔥 NUEVO: INTEGRACIÓN DE WEBSOCKETS (LARAVEL ECHO) 🔥
+  useEffect(() => {
+    // Verificamos si window.Echo está disponible (definido usualmente en tu bootstrap.js)
+    if (typeof window !== "undefined" && (window as any).Echo) {
+      const echo = (window as any).Echo;
+      
+      // Nos suscribimos al canal privado del ticket
+      const channel = echo.private(`ticket.${ticketState.id}`);
+
+      // Escuchamos el evento de Laravel (ajusta 'MessageSent' según el nombre de tu evento en el backend)
+      channel.listen('.MessageSent', (e: any) => {
+        const newMsg = e.message || e; // Depende de cómo emitas la data en Laravel
+
+        // Validamos que el mensaje entrante no sea del usuario que lo acaba de enviar (ya lo agregamos localmente)
+        if (newMsg && newMsg.senderUserId !== currentUserId) {
+          const formattedMsg: SupportMessageWithAttachments = {
+            id: String(newMsg.id),
+            type: newMsg.type === "system" ? "system" : "message",
+            role: newMsg.role === "agent" ? "agent" : "user",
+            senderUserId: newMsg.senderUserId ?? null,
+            senderRole: newMsg.senderRole ?? undefined,
+            senderName: newMsg.senderName ?? newMsg.agentName ?? null,
+            content: String(newMsg.content ?? ""),
+            timestamp: newMsg.timestamp ? new Date(newMsg.timestamp) : new Date(),
+            agentName: newMsg.agentName ?? undefined,
+            attachments: normalizeAttachments(newMsg),
+          };
+
+          setMessages((prev) => {
+            // Filtro para evitar duplicados en la UI
+            if (prev.some(m => m.id === formattedMsg.id)) return prev;
+            return [...prev, formattedMsg];
+          });
+        }
+      });
+
+      // Cleanup al desmontar el componente (salir del chat)
+      return () => {
+        echo.leave(`ticket.${ticketState.id}`);
+      };
+    }
+  }, [ticketState.id, currentUserId]);
+
   useEffect(() => {
     if (!isReportOpen) return;
     setReportTargetArea((prev) => {
       if (prev && reportAreaOptions.some((area) => area.id === prev)) {
         return prev;
       }
-
       return reportAreaOptions[0]?.id ?? "";
     });
     setReportError("");
@@ -118,14 +196,24 @@ export function TicketSupportChatView({
 
   const sendMessage = useCallback(async () => {
     const text = input.trim();
-    if (!text || isTyping || !currentUserId || !canChat) return;
+    if ((!text && !archivo) || isTyping || !currentUserId || !canChat) return;
+
     setInput("");
+    setArchivo(null);
+    if (fileRef.current) fileRef.current.value = "";
     setIsTyping(true);
+
     try {
+      const formData = new FormData();
+      formData.append('userId', String(currentUserId));
+      formData.append('content', text);
+      if (archivo) {
+        formData.append('archivos[]', archivo);
+      }
+
       const response = await fetch(`/api/tickets/${ticketState.id}/messages`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: currentUserId, content: text }),
+        body: formData, 
       });
 
       if (!response.ok) {
@@ -133,7 +221,12 @@ export function TicketSupportChatView({
       }
 
       const created = await response.json();
-      const userMsg: SupportMessage = {
+      const serverAttachments = normalizeAttachments(created);
+      const localPreview: MessageAttachment[] | undefined = archivo
+        ? [{ name: archivo.name, url: URL.createObjectURL(archivo) }]
+        : undefined;
+
+      const userMsg: SupportMessageWithAttachments = {
         id: String(created.id),
         type: created.type === "system" ? "system" : "message",
         role: created.role === "agent" ? "agent" : "user",
@@ -143,6 +236,7 @@ export function TicketSupportChatView({
         content: String(created.content ?? text),
         timestamp: created.timestamp ? new Date(created.timestamp) : new Date(),
         agentName: created.agentName ?? undefined,
+        attachments: serverAttachments ?? localPreview,
       };
 
       setMessages((p) => [...p, userMsg]);
@@ -151,7 +245,7 @@ export function TicketSupportChatView({
     } finally {
       setIsTyping(false);
     }
-  }, [input, isTyping, currentUserId, ticketState.id, currentUserRole, canChat]);
+  }, [input, archivo, isTyping, currentUserId, ticketState.id, currentUserRole, canChat]);
 
   const handleRequesterDecision = useCallback(
     async (solved: boolean) => {
@@ -352,11 +446,12 @@ export function TicketSupportChatView({
             if (isRequester) {
               return requesterUserId !== null && msg.senderUserId === requesterUserId;
             }
-
             return requesterUserId === null ? true : msg.senderUserId !== requesterUserId;
           })();
+          
           const senderName = msg.senderName ?? msg.agentName ?? (msg.role === "agent" ? "Agente de Soporte" : ticketState.requester);
           const outgoingInitials = currentUserId !== null && msg.senderUserId === currentUserId ? currentUserInitials : initials(senderName);
+          
           return (
             <div key={msg.id} className={`flex gap-3 ${isOutgoing ? "justify-end" : "justify-start"}`}>
               {!isOutgoing && (
@@ -372,7 +467,38 @@ export function TicketSupportChatView({
                   }`}
                   style={isOutgoing ? { background: "linear-gradient(135deg,#1B3F7A 0%,#2855a0 100%)" } : {}}
                 >
-                  <p dangerouslySetInnerHTML={{ __html: msg.content.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>") }} />
+                  {msg.attachments && msg.attachments.length > 0 && (
+                    <div className={`flex flex-col gap-2 ${msg.content ? "mb-2" : ""}`}>
+                      {msg.attachments.map((att, i) =>
+                        isImageAttachment(att.name) ? (
+                          <a key={i} href={att.url} target="_blank" rel="noopener noreferrer">
+                            <img
+                              src={att.url}
+                              alt={att.name}
+                              className="max-w-[220px] max-h-[220px] rounded-lg border border-black/10 object-cover"
+                            />
+                          </a>
+                        ) : (
+                          <a
+                            key={i}
+                            href={att.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            download={att.name}
+                            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium hover:underline ${
+                              isOutgoing ? "bg-white/15 text-white" : "bg-gray-100 text-gray-700"
+                            }`}
+                          >
+                            <Paperclip size={12} />
+                            <span className="truncate max-w-[180px]">{att.name}</span>
+                          </a>
+                        )
+                      )}
+                    </div>
+                  )}
+                  {msg.content && (
+                    <p dangerouslySetInnerHTML={{ __html: msg.content.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>") }} />
+                  )}
                 </div>
                 <p className="text-xs text-gray-400 mt-1 mx-0.5">{msg.timestamp.toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" })}</p>
               </div>
@@ -415,6 +541,24 @@ export function TicketSupportChatView({
           ) : (
             <div className="bg-gray-50 border border-gray-200 rounded-2xl focus-within:border-[#1B3F7A] focus-within:bg-white focus-within:shadow-sm transition-all">
               {!canChat && <div className="px-4 pt-3 text-xs text-amber-700">Chat en modo lectura: solo el responsable del ticket o el solicitante pueden responder.</div>}
+              
+              {archivo && (
+                <div className="px-4 py-2 text-xs text-blue-700 flex items-center justify-between bg-blue-50 border-t border-x border-gray-200 rounded-t-2xl">
+                  <span className="truncate flex items-center gap-1">
+                    📎 {archivo.name}
+                  </span>
+                  <button
+                    onClick={() => {
+                      setArchivo(null);
+                      if (fileRef.current) fileRef.current.value = "";
+                    }}
+                    className="text-red-500 hover:text-red-700 font-bold px-2"
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
+              
               <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -425,9 +569,19 @@ export function TicketSupportChatView({
                 className="w-full px-4 pt-3 pb-2 text-sm text-gray-800 placeholder-gray-400 bg-transparent resize-none outline-none leading-relaxed"
                 style={{ fontFamily: "Inter, sans-serif" }}
               />
+              
               <div className="flex items-center justify-between px-4 pb-3">
                 <div className="flex items-center gap-1">
-                  <input ref={fileRef} type="file" className="hidden" multiple />
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files[0]) {
+                        setArchivo(e.target.files[0]);
+                      }
+                    }}
+                  />
                   <button onClick={() => fileRef.current?.click()} disabled={!canChat} className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
                     <Paperclip size={15} />
                   </button>
@@ -435,7 +589,7 @@ export function TicketSupportChatView({
                 </div>
                 <button
                   onClick={sendMessage}
-                  disabled={!canChat || !input.trim() || isTyping}
+                  disabled={!canChat || (!input.trim() && !archivo) || isTyping}
                   className="flex items-center gap-2 px-4 py-2 rounded-xl text-white text-sm font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                   style={{ background: "linear-gradient(135deg,#1B3F7A 0%,#2855a0 100%)" }}
                 >
