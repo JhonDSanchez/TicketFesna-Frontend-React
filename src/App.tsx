@@ -4,6 +4,7 @@ import { appState, allTickets, currentUser, staffAreaAgents, staffAreaInbox } fr
 import { applyDashboardPayload, mapTicketArray } from "./app/utils";
 import type { AuthUser, DashboardPayload } from "./app/types";
 import { AppViewRouter } from "./app/router/AppViewRouter";
+import { BotpressChat } from "./components/BotpressChat";
 
 export default function App() {
   const [dataVersion, setDataVersion] = useState(0);
@@ -141,21 +142,34 @@ export default function App() {
   };
 
   if (!authUser) {
-    return <LoginView onLogin={handleLogin} />;
+    return (
+      <>
+        <LoginView onLogin={handleLogin} />
+        <BotpressChat />
+      </>
+    );
   }
 
   if (authUser.mustChangePassword) {
-    return <ForcePasswordChangeView user={authUser} onComplete={handlePasswordChanged} onLogout={handleLogout} />;
+    return (
+      <>
+        <ForcePasswordChangeView user={authUser} onComplete={handlePasswordChanged} onLogout={handleLogout} />
+        <BotpressChat />
+      </>
+    );
   }
 
   return (
-    <AppViewRouter
-      authUser={authUser}
-      dataVersion={dataVersion}
-      dataError={dataError}
-      staffInboxCount={staffInboxCount}
-      onStaffInboxCountChange={setStaffInboxCount}
-      onLogout={handleLogout}
-    />
+    <>
+      <AppViewRouter
+        authUser={authUser}
+        dataVersion={dataVersion}
+        dataError={dataError}
+        staffInboxCount={staffInboxCount}
+        onStaffInboxCountChange={setStaffInboxCount}
+        onLogout={handleLogout}
+      />
+      <BotpressChat />
+    </>
   );
 }

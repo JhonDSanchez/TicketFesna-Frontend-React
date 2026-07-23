@@ -444,11 +444,76 @@ export function AreasView() {
 }
 
 export function ReportsView() {
+  type ReportsStatsPayload = {
+    byArea: Array<{ name: string; value: number }>;
+    byMonth: Array<{ month: string; tickets: number; resolved: number }>;
+    aiAccuracy: Array<{ week: string; accuracy: number }>;
+    kpis: {
+      totalTickets: number;
+      resolutionRate: number;
+      aiAccuracy: number;
+      avgResolutionHours: number;
+    };
+  };
+
+  const fallbackStats: ReportsStatsPayload = {
+    byArea: reportsData.byArea,
+    byMonth: reportsData.byMonth,
+    aiAccuracy: reportsData.aiAccuracy,
+    kpis: {
+      totalTickets: reportsData.byMonth.reduce((a, b) => a + b.tickets, 0),
+      resolutionRate: (() => {
+        const total = reportsData.byMonth.reduce((a, b) => a + b.tickets, 0);
+        const resolved = reportsData.byMonth.reduce((a, b) => a + b.resolved, 0);
+        return total > 0 ? Math.round((resolved / total) * 100) : 0;
+      })(),
+      aiAccuracy: reportsData.aiAccuracy.length > 0 ? reportsData.aiAccuracy[reportsData.aiAccuracy.length - 1].accuracy : 0,
+      avgResolutionHours: 6.4,
+    },
+  };
+
   const [expandedReport, setExpandedReport] = useState<string | null>(null);
   const [backendReports, setBackendReports] = useState<MisroutedReport[]>([]);
+  const [stats, setStats] = useState<ReportsStatsPayload>(fallbackStats);
   const [reportsRevision, setReportsRevision] = useState(0);
   const [deletingReportId, setDeletingReportId] = useState<string | null>(null);
   const [reportsFeedback, setReportsFeedback] = useState("");
+
+  useEffect(() => {
+    const loadStats = async () => {
+      try {
+        const response = await fetch("/api/reports/stats");
+        if (!response.ok) return;
+
+        const payload = await response.json();
+        const byArea = Array.isArray(payload?.byArea) ? payload.byArea : fallbackStats.byArea;
+        const byMonth = Array.isArray(payload?.byMonth) ? payload.byMonth : fallbackStats.byMonth;
+        const aiAccuracy = Array.isArray(payload?.aiAccuracy) ? payload.aiAccuracy : fallbackStats.aiAccuracy;
+
+        const kpis = {
+          totalTickets: Number(payload?.kpis?.totalTickets ?? byMonth.reduce((a: number, b: any) => a + Number(b?.tickets ?? 0), 0)),
+          resolutionRate: Number(payload?.kpis?.resolutionRate ?? 0),
+          aiAccuracy: Number(payload?.kpis?.aiAccuracy ?? (aiAccuracy.length > 0 ? Number(aiAccuracy[aiAccuracy.length - 1]?.accuracy ?? 0) : 0)),
+          avgResolutionHours: Number(payload?.kpis?.avgResolutionHours ?? 0),
+        };
+
+        setStats({
+          byArea: byArea.map((row: any) => ({ name: String(row?.name ?? "Área"), value: Number(row?.value ?? 0) })),
+          byMonth: byMonth.map((row: any) => ({
+            month: String(row?.month ?? ""),
+            tickets: Number(row?.tickets ?? 0),
+            resolved: Number(row?.resolved ?? 0),
+          })),
+          aiAccuracy: aiAccuracy.map((row: any) => ({ week: String(row?.week ?? ""), accuracy: Number(row?.accuracy ?? 0) })),
+          kpis,
+        });
+      } catch {
+        setStats(fallbackStats);
+      }
+    };
+
+    loadStats();
+  }, []);
 
   useEffect(() => {
     const loadReports = async () => {
@@ -521,16 +586,16 @@ export function ReportsView() {
     }
   };
 
-  const total = reportsData.byMonth.reduce((a, b) => a + b.tickets, 0);
-  const resolved = reportsData.byMonth.reduce((a, b) => a + b.resolved, 0);
-  const rate = total > 0 ? Math.round((resolved / total) * 100) : 0;
-  const lastAcc = reportsData.aiAccuracy.length > 0 ? reportsData.aiAccuracy[reportsData.aiAccuracy.length - 1].accuracy : 0;
+  const total = stats.kpis.totalTickets;
+  const rate = stats.kpis.resolutionRate;
+  const lastAcc = stats.kpis.aiAccuracy;
+  const avgResolutionHours = stats.kpis.avgResolutionHours;
 
   const kpis = [
-    { label: "Total Tickets (6 meses)", value: total, icon: TicketIcon, sub: "+12%", positive: true },
-    { label: "Tasa de Resolución", value: `${rate}%`, icon: CheckCircle2, sub: "+4%", positive: true },
-    { label: "Precisión IA", value: `${lastAcc}%`, icon: Sparkles, sub: "Clasificación", positive: true },
-    { label: "Tiempo Promedio", value: "6.4h", icon: Clock, sub: "Resolución", positive: false },
+    { label: "Total Tickets (6 meses)", value: total, icon: TicketIcon, sub: "DB real", positive: true },
+    { label: "Tasa de Resolución", value: `${rate}%`, icon: CheckCircle2, sub: "DB real", positive: true },
+    { label: "Precisión IA", value: `${lastAcc}%`, icon: Sparkles, sub: "DB real", positive: true },
+    { label: "Tiempo Promedio", value: `${avgResolutionHours}h`, icon: Clock, sub: "DB real", positive: false },
   ];
 
   return (
@@ -560,7 +625,7 @@ export function ReportsView() {
         <div className="col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
           <h3 className="text-sm font-semibold text-gray-800 mb-4">Tickets por Mes</h3>
           <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={reportsData.byMonth} barGap={4}>
+            <BarChart data={stats.byMonth} barGap={4}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
               <XAxis dataKey="month" tick={{ fontSize: 11, fill: "#9CA3AF" }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fontSize: 11, fill: "#9CA3AF" }} axisLine={false} tickLine={false} />
@@ -574,14 +639,14 @@ export function ReportsView() {
           <h3 className="text-sm font-semibold text-gray-800 mb-4">Por Área</h3>
           <ResponsiveContainer width="100%" height={180}>
             <PieChart>
-              <Pie data={reportsData.byArea} cx="50%" cy="50%" innerRadius={45} outerRadius={72} paddingAngle={3} dataKey="value">
-                {reportsData.byArea.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+              <Pie data={stats.byArea} cx="50%" cy="50%" innerRadius={45} outerRadius={72} paddingAngle={3} dataKey="value">
+                {stats.byArea.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
               </Pie>
               <Tooltip contentStyle={{ borderRadius: 10, border: "none", boxShadow: "0 4px 20px rgba(0,0,0,0.1)", fontSize: 12 }} />
             </PieChart>
           </ResponsiveContainer>
           <div className="space-y-1.5 mt-1">
-            {reportsData.byArea.map((cat, i) => (
+            {stats.byArea.map((cat, i) => (
               <div key={cat.name} className="flex items-center justify-between">
                 <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full" style={{ background: PIE_COLORS[i] }} /><span className="text-xs text-gray-600">{cat.name}</span></div>
                 <span className="text-xs font-semibold text-gray-800">{cat.value}%</span>
@@ -600,7 +665,7 @@ export function ReportsView() {
           <span className="flex items-center gap-1.5 text-sm font-semibold text-emerald-600"><TrendingUp size={14} />{lastAcc}% esta semana</span>
         </div>
         <ResponsiveContainer width="100%" height={140}>
-          <AreaChart data={reportsData.aiAccuracy}>
+          <AreaChart data={stats.aiAccuracy}>
             <defs>
               <linearGradient id="aiGrad" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#1B3F7A" stopOpacity={0.15} />

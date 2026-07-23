@@ -22,6 +22,7 @@ import { PriorityBadge, StatusBadge } from "../ui";
 type MessageAttachment = {
   name: string;
   url: string;
+  downloadUrl?: string;
 };
 
 type SupportMessageWithAttachments = SupportMessage & {
@@ -42,6 +43,7 @@ function normalizeAttachments(raw: any): MessageAttachment[] | undefined {
       return {
         name: item?.name ?? item?.original_name ?? String(url).split("/").pop() ?? "archivo",
         url: String(url),
+        downloadUrl: item?.downloadUrl ?? item?.download_url ?? undefined,
       };
     })
     .filter((item: MessageAttachment | null): item is MessageAttachment => item !== null);
@@ -213,11 +215,15 @@ export function TicketSupportChatView({
 
       const response = await fetch(`/api/tickets/${ticketState.id}/messages`, {
         method: "POST",
+        headers: {
+          Accept: "application/json",
+        },
         body: formData, 
       });
 
       if (!response.ok) {
-        throw new Error("No se pudo enviar el mensaje");
+        const errorPayload = await response.json().catch(() => ({}));
+        throw new Error(errorPayload?.message ?? "No se pudo enviar el mensaje");
       }
 
       const created = await response.json();
@@ -469,31 +475,26 @@ export function TicketSupportChatView({
                 >
                   {msg.attachments && msg.attachments.length > 0 && (
                     <div className={`flex flex-col gap-2 ${msg.content ? "mb-2" : ""}`}>
-                      {msg.attachments.map((att, i) =>
-                        isImageAttachment(att.name) ? (
-                          <a key={i} href={att.url} target="_blank" rel="noopener noreferrer">
-                            <img
-                              src={att.url}
-                              alt={att.name}
-                              className="max-w-[220px] max-h-[220px] rounded-lg border border-black/10 object-cover"
-                            />
-                          </a>
-                        ) : (
+                      {msg.attachments.map((att, i) => {
+                        const downloadUrl = att.downloadUrl ?? att.url;
+                        return (
                           <a
                             key={i}
-                            href={att.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            download={att.name}
-                            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium hover:underline ${
+                            href={downloadUrl}
+                            className={`flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium hover:opacity-90 ${
                               isOutgoing ? "bg-white/15 text-white" : "bg-gray-100 text-gray-700"
                             }`}
                           >
-                            <Paperclip size={12} />
-                            <span className="truncate max-w-[180px]">{att.name}</span>
+                            <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${isOutgoing ? "bg-white/15" : "bg-white border border-gray-200"}`}>
+                              <Paperclip size={14} />
+                            </div>
+                            <div className="min-w-0 flex-1 text-left">
+                              <p className="truncate max-w-[220px]">{att.name}</p>
+                              <p className={`text-[10px] ${isOutgoing ? "text-white/70" : "text-gray-500"}`}>Descargar archivo adjunto</p>
+                            </div>
                           </a>
-                        )
-                      )}
+                        );
+                      })}
                     </div>
                   )}
                   {msg.content && (
